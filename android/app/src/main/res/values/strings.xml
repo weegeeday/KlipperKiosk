@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">KlipperKiosk</string>
+    <string name="title_activity_main">KlipperKiosk</string>
+    <string name="package_name">com.klipperkiosk.app</string>
+    <string name="custom_url_scheme">com.klipperkiosk.app</string>
+</resources>
