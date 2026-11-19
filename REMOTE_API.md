@@ -1,15 +1,15 @@
 # KlipperKiosk — Remote Management API
 
-The Android kiosk app runs a lightweight local HTTP JSON server on port **`8765`** and advertises itself via mDNS as **`klipper-tablet.local`**, so you don't need a static IP.
+The Android kiosk app runs a lightweight local HTTP JSON server on port **`8765`** and advertises itself via mDNS as **`klipper-kiosk.local`**, so you don't need a static IP.
 
-The tablet's hostname and current LAN IP are also displayed at the top of the on-device **⚙ Kiosk Settings** dialog (`Remote API: http://klipper-tablet.local:8765 (<ip>)`).
+The tablet's hostname and current LAN IP are also displayed at the top of the on-device **⚙ Kiosk Settings** dialog (`Remote API: http://klipper-kiosk.local:8765 (<ip>)`).
 
 ---
 
 ## Base URL
 
 ```text
-http://klipper-tablet.local:8765
+http://klipper-kiosk.local:8765
 ```
 *(Or `http://<tablet-ip>:8765` if your network doesn't forward mDNS.)*
 

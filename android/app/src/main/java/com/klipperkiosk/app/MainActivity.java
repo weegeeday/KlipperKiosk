@@ -75,7 +75,7 @@ public class MainActivity extends AppCompatActivity {
     private static final String KEY_SETTINGS_PIN = "settings_pin";
     private static final String DEFAULT_SETTINGS_PIN = "1234";
     private static final int REMOTE_API_PORT = 8765;
-    private static final String MDNS_HOSTNAME = "klipper-tablet.local";
+    private static final String MDNS_HOSTNAME = "klipper-kiosk.local";
 
     private static final int COLOR_BG_CHROME = Color.parseColor("#111318");
     private static final int COLOR_BG_TAB = Color.parseColor("#1A1D24");
