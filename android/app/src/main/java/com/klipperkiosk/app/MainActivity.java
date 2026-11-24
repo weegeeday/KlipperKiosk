@@ -21,10 +21,12 @@ import android.net.NetworkRequest;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.text.InputType;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
@@ -73,7 +75,9 @@ public class MainActivity extends AppCompatActivity {
     private static final String KEY_ACTIVE_ID = "active_tab_id";
     private static final String KEY_KIOSK_LOCKED = "kiosk_locked";
     private static final String KEY_SETTINGS_PIN = "settings_pin";
+    private static final String KEY_SLEEP_TIMEOUT_MIN = "sleep_timeout_min";
     private static final String DEFAULT_SETTINGS_PIN = "1234";
+    private static final int DEFAULT_SLEEP_TIMEOUT_MIN = 5;
     private static final int REMOTE_API_PORT = 8765;
     private static final String MDNS_HOSTNAME = "klipper-kiosk.local";
 
@@ -128,14 +132,19 @@ public class MainActivity extends AppCompatActivity {
 
     private String activeTabId = "";
     private String settingsPin = DEFAULT_SETTINGS_PIN;
+    private int sleepTimeoutMinutes = DEFAULT_SLEEP_TIMEOUT_MIN;
     private boolean kioskLocked = false;
+    private boolean isSleeping = false;
     private boolean lockTaskBypassed = false;
     private int activeTapCount = 0;
     private long lastTapTime = 0L;
 
+    private final Runnable sleepRunnable = this::enterSleepMode;
+
     private LinearLayout tabsContainer;
     private LinearLayout actionsContainer;
     private FrameLayout webContainer;
+    private FrameLayout sleepOverlay;
     private WebView sharedWebView;
     private RemoteManagementServer remoteServer;
     private MdnsResponder mdnsResponder;
@@ -183,6 +192,19 @@ public class MainActivity extends AppCompatActivity {
         if (!activeTabId.isEmpty()) {
             activateTab(activeTabId, true);
         }
+        resetSleepTimer();
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent ev) {
+        if (isSleeping) {
+            if (ev.getAction() == MotionEvent.ACTION_UP) {
+                wakeFromSleep();
+            }
+            return true;
+        }
+        resetSleepTimer();
+        return super.dispatchTouchEvent(ev);
     }
 
     @Override
@@ -192,13 +214,19 @@ public class MainActivity extends AppCompatActivity {
         if (!lockTaskBypassed) {
             enterLockTaskIfDeviceOwner();
         }
-        if (sharedWebView != null) {
-            sharedWebView.onResume();
+        if (isSleeping) {
+            wakeFromSleep();
+        } else {
+            if (sharedWebView != null) {
+                sharedWebView.onResume();
+            }
+            resetSleepTimer();
         }
     }
 
     @Override
     protected void onPause() {
+        mainHandler.removeCallbacks(sleepRunnable);
         if (sharedWebView != null) {
             sharedWebView.onPause();
         }
@@ -208,6 +236,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         mainHandler.removeCallbacks(retryRunnable);
+        mainHandler.removeCallbacks(sleepRunnable);
         unregisterNetworkCallback();
         if (remoteServer != null) {
             remoteServer.stop();
@@ -394,6 +423,7 @@ public class MainActivity extends AppCompatActivity {
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT
         ));
 
+        actionsContainer.addView(createIconButton("\u263E", v -> enterSleepMode()));
         actionsContainer.addView(createIconButton("\u21BB", v -> reloadActiveTab()));
         actionsContainer.addView(createIconButton("\u2699", v -> promptForSettingsPin()));
         topBar.addView(actionsContainer);
@@ -413,7 +443,90 @@ public class MainActivity extends AppCompatActivity {
         root.addView(topBar);
         root.addView(divider);
         root.addView(webContainer);
-        setContentView(root);
+
+        FrameLayout outerRoot = new FrameLayout(this);
+        outerRoot.setLayoutParams(new ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+        outerRoot.addView(root);
+
+        sleepOverlay = new FrameLayout(this);
+        sleepOverlay.setBackgroundColor(Color.BLACK);
+        sleepOverlay.setVisibility(View.GONE);
+        sleepOverlay.setClickable(true);
+        sleepOverlay.setFocusable(true);
+        TextView sleepHint = new TextView(this);
+        sleepHint.setText("Sleeping - Tap to wake");
+        sleepHint.setTextColor(Color.parseColor("#333842"));
+        sleepHint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        FrameLayout.LayoutParams hintLp = new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER
+        );
+        sleepOverlay.addView(sleepHint, hintLp);
+        outerRoot.addView(sleepOverlay, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+
+        setContentView(outerRoot);
+    }
+
+    private void resetSleepTimer() {
+        mainHandler.removeCallbacks(sleepRunnable);
+        if (sleepTimeoutMinutes > 0 && !isSleeping) {
+            mainHandler.postDelayed(sleepRunnable, sleepTimeoutMinutes * 60_000L);
+        }
+    }
+
+    private void enterSleepMode() {
+        if (isSleeping) return;
+        isSleeping = true;
+        mainHandler.removeCallbacks(sleepRunnable);
+
+        if (sleepOverlay != null) {
+            sleepOverlay.setVisibility(View.VISIBLE);
+        }
+        if (sharedWebView != null) {
+            sharedWebView.onPause();
+            sharedWebView.pauseTimers();
+        }
+
+        // Dim backlight to minimum and release FLAG_KEEP_SCREEN_ON so LCD can turn fully off
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        WindowManager.LayoutParams lp = getWindow().getAttributes();
+        lp.screenBrightness = 0.01f;
+        getWindow().setAttributes(lp);
+    }
+
+    @SuppressWarnings("deprecation")
+    private void wakeFromSleep() {
+        try {
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (pm != null && !pm.isInteractive()) {
+                PowerManager.WakeLock wl = pm.newWakeLock(
+                    PowerManager.SCREEN_BRIGHT_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                    "KlipperKiosk:Wake"
+                );
+                wl.acquire(3000);
+                wl.release();
+            }
+        } catch (Exception ignored) {
+        }
+
+        isSleeping = false;
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        WindowManager.LayoutParams lp = getWindow().getAttributes();
+        lp.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
+        getWindow().setAttributes(lp);
+
+        if (sleepOverlay != null) {
+            sleepOverlay.setVisibility(View.GONE);
+        }
+        if (sharedWebView != null) {
+            sharedWebView.resumeTimers();
+            sharedWebView.onResume();
+        }
+        applyKioskImmersiveMode();
+        resetSleepTimer();
     }
 
     private Button createIconButton(String symbol, View.OnClickListener onClick) {
@@ -635,6 +748,7 @@ public class MainActivity extends AppCompatActivity {
         SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
         kioskLocked = prefs.getBoolean(KEY_KIOSK_LOCKED, false);
         settingsPin = prefs.getString(KEY_SETTINGS_PIN, DEFAULT_SETTINGS_PIN);
+        sleepTimeoutMinutes = prefs.getInt(KEY_SLEEP_TIMEOUT_MIN, DEFAULT_SLEEP_TIMEOUT_MIN);
 
         String savedJson = prefs.getString(KEY_TABS_JSON, null);
         if (savedJson != null) {
@@ -703,6 +817,7 @@ public class MainActivity extends AppCompatActivity {
                 .putString(KEY_ACTIVE_ID, activeTabId)
                 .putBoolean(KEY_KIOSK_LOCKED, kioskLocked)
                 .putString(KEY_SETTINGS_PIN, settingsPin)
+                .putInt(KEY_SLEEP_TIMEOUT_MIN, sleepTimeoutMinutes)
                 .apply();
         } catch (Exception ignored) {
         }
@@ -823,6 +938,41 @@ public class MainActivity extends AppCompatActivity {
         pinRow.addView(newPinInput);
         pinRow.addView(savePinBtn);
         content.addView(pinRow);
+
+        LinearLayout sleepRow = new LinearLayout(this);
+        sleepRow.setOrientation(LinearLayout.HORIZONTAL);
+        sleepRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams sleepRowLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        sleepRowLp.topMargin = dp(8);
+        sleepRow.setLayoutParams(sleepRowLp);
+
+        EditText sleepInput = new EditText(this);
+        sleepInput.setHint("Auto-sleep minutes, 0=off (current: " + sleepTimeoutMinutes + ")");
+        sleepInput.setInputType(InputType.TYPE_CLASS_NUMBER);
+        sleepInput.setLayoutParams(new LinearLayout.LayoutParams(
+            0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+        ));
+        Button saveSleepBtn = new Button(this);
+        saveSleepBtn.setText("Save Sleep");
+        saveSleepBtn.setOnClickListener(v -> {
+            String raw = sleepInput.getText().toString().trim();
+            if (!raw.isEmpty()) {
+                try {
+                    int mins = Math.max(0, Math.min(1440, Integer.parseInt(raw)));
+                    sleepTimeoutMinutes = mins;
+                    saveState();
+                    resetSleepTimer();
+                    sleepInput.setText("");
+                    sleepInput.setHint("Auto-sleep updated (" + sleepTimeoutMinutes + " min)");
+                } catch (NumberFormatException ignored) {
+                }
+            }
+        });
+        sleepRow.addView(sleepInput);
+        sleepRow.addView(saveSleepBtn);
+        content.addView(sleepRow);
 
         Runnable rebuildList = new Runnable() {
             @Override
@@ -980,6 +1130,8 @@ public class MainActivity extends AppCompatActivity {
                 return runOnUiSync(() -> {
                     JSONObject obj = buildTabsPayload();
                     obj.put("kioskLocked", kioskLocked);
+                    obj.put("sleeping", isSleeping);
+                    obj.put("sleepTimeoutMinutes", sleepTimeoutMinutes);
                     obj.put("hostname", MDNS_HOSTNAME);
                     obj.put("deviceIp", RemoteManagementServer.getDeviceIpv4());
                     obj.put("port", REMOTE_API_PORT);
@@ -1209,6 +1361,26 @@ public class MainActivity extends AppCompatActivity {
                     }
                 }
                 return obj;
+            }
+
+            @Override
+            public void sleepNow() {
+                runOnUiThread(MainActivity.this::enterSleepMode);
+            }
+
+            @Override
+            public void wakeNow() {
+                runOnUiThread(MainActivity.this::wakeFromSleep);
+            }
+
+            @Override
+            public boolean setSleepTimeoutMinutes(int minutes) {
+                return runOnUiSync(() -> {
+                    sleepTimeoutMinutes = Math.max(0, Math.min(1440, minutes));
+                    saveState();
+                    resetSleepTimer();
+                    return true;
+                }, false);
             }
         });
         remoteServer.start();

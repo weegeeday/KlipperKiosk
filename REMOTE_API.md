@@ -89,7 +89,10 @@ Returns active tab, all tabs (with resolved IPs when available), UI lock state, 
     }
   ],
   "kioskLocked": false,
+  "sleeping": false,
+  "sleepTimeoutMinutes": 5,
   "lockTaskMode": true,
+  "hostname": "klipper-kiosk.local",
   "deviceIp": "192.168.4.150",
   "port": 8765
 }
@@ -379,6 +382,30 @@ Transmits an infrared pulse pattern through the tablet's built-in IR blaster. Su
   "frequency": 38000,
   "pulses": 7,
   "repeat": 1
+}
+```
+
+---
+
+### 17. Sleep & Wake Mode
+
+Reduces power draw when idle by pausing the WebView/timers, showing a black tap-to-wake screen at minimum brightness, and releasing `FLAG_KEEP_SCREEN_ON` so Android can turn the LCD backlight off completely.
+
+- `POST /api/sleep` — Enters sleep mode immediately.
+- `POST /api/wake` — Wakes the display (even if the LCD turned off) and resumes the WebView.
+- `POST /api/sleep/config` — Sets the inactivity auto-sleep timeout in minutes (`0` disables auto-sleep; default `5`):
+  ```json
+  {
+    "timeoutMinutes": 5
+  }
+  ```
+
+**Response (`200 OK`):**
+```json
+{
+  "ok": true,
+  "message": "Sleep timeout updated",
+  "sleepTimeoutMinutes": 5
 }
 ```
 

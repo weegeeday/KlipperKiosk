@@ -16,5 +16,10 @@ export const DEFAULT_SITES: KioskTab[] = [
     title: 'Klip',
     url: 'http://pi-klipper2.local',
   },
+  {
+    id: 'site-3',
+    title: 'Ender',
+    url: 'http://pi-ender.local',
+  },
 ];
 

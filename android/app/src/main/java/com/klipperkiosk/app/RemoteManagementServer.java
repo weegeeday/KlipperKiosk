@@ -45,6 +45,9 @@ public class RemoteManagementServer {
         boolean updatePin(String newPin);
         JSONObject getIrInfo();
         JSONObject transmitIr(int frequencyHz, int[] patternUs, int repeat, int repeatDelayMs);
+        void sleepNow();
+        void wakeNow();
+        boolean setSleepTimeoutMinutes(int minutes);
     }
 
     private final int port;
@@ -362,6 +365,36 @@ public class RemoteManagementServer {
             JSONObject result = controller.transmitIr(frequency, pattern, repeat, repeatDelayMs);
             int statusCode = result.optBoolean("ok", false) ? 200 : 400;
             writeJson(out, statusCode, result);
+            return;
+        }
+
+        if ("POST".equals(method) && "/api/sleep".equals(path)) {
+            controller.sleepNow();
+            writeJson(out, 200, okJson("Entered sleep mode"));
+            return;
+        }
+
+        if ("POST".equals(method) && "/api/wake".equals(path)) {
+            controller.wakeNow();
+            writeJson(out, 200, okJson("Woke from sleep mode"));
+            return;
+        }
+
+        if ("POST".equals(method) && "/api/sleep/config".equals(path)) {
+            JSONObject req = parseBodyJson(body);
+            if (!req.has("timeoutMinutes")) {
+                writeJson(out, 400, errorJson("timeoutMinutes integer is required (0 to disable)"));
+                return;
+            }
+            int minutes = req.optInt("timeoutMinutes", -1);
+            if (minutes < 0 || minutes > 1440) {
+                writeJson(out, 400, errorJson("timeoutMinutes must be between 0 and 1440"));
+                return;
+            }
+            controller.setSleepTimeoutMinutes(minutes);
+            JSONObject res = okJson("Sleep timeout updated");
+            res.put("sleepTimeoutMinutes", minutes);
+            writeJson(out, 200, res);
             return;
         }
 
